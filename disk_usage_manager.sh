@@ -16,6 +16,8 @@ ADMIN_EMAIL="admin@example.com"   # Email to send notifications to
 EMAIL_SUBJECT="Disk Usage Alert"  # Email subject
 CRITICAL_EMAIL_SUBJECT="CRITICAL: Disk Usage Alert"  # Critical alert email subject
 WARNING_EMAIL_SUBJECT="WARNING: Disk Usage Alert"    # Warning alert email subject
+REPEAT_ALERT_FILE="/tmp/disk_alert_timestamp"        # File to track last alert time
+REPEAT_ALERT_INTERVAL=30          # Minutes between repeated critical alerts
 
 # Function to log messages
 log_message() {
@@ -72,6 +74,62 @@ clean_package_cache() {
     fi
 }
 
+# Function to check if we should send a repeated alert
+should_send_repeated_alert() {
+    # If the timestamp file doesn't exist, we should send an alert
+    if [ ! -f "$REPEAT_ALERT_FILE" ]; then
+        return 0  # True in bash
+    fi
+    
+    # Get the last alert timestamp
+    local last_alert_time=$(cat "$REPEAT_ALERT_FILE")
+    local current_time=$(date +%s)
+    local time_diff=$((current_time - last_alert_time))
+    local interval_seconds=$((REPEAT_ALERT_INTERVAL * 60))
+    
+    # If enough time has passed since the last alert, we should send another
+    if [ "$time_diff" -ge "$interval_seconds" ]; then
+        return 0  # True in bash
+    else
+        return 1  # False in bash
+    fi
+}
+
+# Function to update the last alert timestamp
+update_alert_timestamp() {
+    date +%s > "$REPEAT_ALERT_FILE"
+    log_message "Updated alert timestamp for repeated alerts"
+}
+
+# Function to send repeated critical alerts
+send_repeated_critical_alert() {
+    local usage="$1"
+    
+    # Check if we should send a repeated alert
+    if should_send_repeated_alert; then
+        log_message "Sending repeated critical alert (disk usage: ${usage}%)"
+        
+        # Create repeated alert message
+        local repeat_message="!!! CRITICAL DISK USAGE ALERT - REMINDER !!!\n\n"
+        repeat_message+="Current disk usage: ${usage}% is still above the CRITICAL threshold of ${CRITICAL_THRESHOLD}%\n\n"
+        repeat_message+="URGENT ACTION REQUIRED!\n\n"
+        repeat_message+="This is a repeated alert. The system is still in a critical state.\n"
+        repeat_message+="Please investigate immediately to prevent system failure.\n\n"
+        repeat_message+="This alert will continue to be sent every ${REPEAT_ALERT_INTERVAL} minutes until the situation is resolved.\n"
+        
+        # Send the repeated alert
+        send_email "$CRITICAL_EMAIL_SUBJECT - REMINDER" "$repeat_message"
+        
+        # Update the timestamp
+        update_alert_timestamp
+        
+        return 0  # Alert was sent
+    else
+        log_message "Skipping repeated alert - not enough time has passed since last alert"
+        return 1  # Alert was not sent
+    fi
+}
+
 # Main function
 main() {
     # Create log file if it doesn't exist
@@ -80,6 +138,21 @@ main() {
     # Check root partition usage
     ROOT_USAGE=$(check_disk_usage "/")
     log_message "Current disk usage: ${ROOT_USAGE}%"
+    
+    # Check if this is a repeated alert run
+    if [ "$1" = "repeat-check" ]; then
+        if [ "$ROOT_USAGE" -ge "$CRITICAL_THRESHOLD" ]; then
+            send_repeated_critical_alert "$ROOT_USAGE"
+        else
+            log_message "Disk usage is below critical threshold. No repeated alert needed."
+            # If disk usage is no longer critical, remove the timestamp file
+            if [ -f "$REPEAT_ALERT_FILE" ]; then
+                rm -f "$REPEAT_ALERT_FILE"
+                log_message "Removed alert timestamp file as disk usage is no longer critical"
+            fi
+        fi
+        exit 0
+    fi
     
     # Initialize email message
     EMAIL_MESSAGE="Disk Usage Report\n"
@@ -96,9 +169,11 @@ main() {
         CRITICAL_MESSAGE+="URGENT ACTION REQUIRED!\n\n"
         CRITICAL_MESSAGE+="The system will now attempt emergency cleanup procedures, but manual intervention may be necessary.\n"
         CRITICAL_MESSAGE+="Please investigate immediately to prevent system failure.\n\n"
+        CRITICAL_MESSAGE+="Repeated alerts will be sent every ${REPEAT_ALERT_INTERVAL} minutes until the situation is resolved.\n"
         
-        # Send critical alert immediately
+        # Send critical alert immediately and update timestamp
         send_email "$CRITICAL_EMAIL_SUBJECT" "$CRITICAL_MESSAGE"
+        update_alert_timestamp
         
         # Perform more aggressive cleanup for critical situations
         log_message "Performing emergency cleanup procedures..."
@@ -130,6 +205,14 @@ main() {
         if [ "$NEW_USAGE" -ge "$CRITICAL_THRESHOLD" ]; then
             FOLLOWUP_MESSAGE+="WARNING: Disk usage is still above critical threshold!\n"
             FOLLOWUP_MESSAGE+="Manual intervention is required immediately.\n"
+            FOLLOWUP_MESSAGE+="\nThis script will continue to send alerts every ${REPEAT_ALERT_INTERVAL} minutes until the situation is resolved.\n"
+        else
+            # If cleanup brought usage below critical, remove the timestamp file
+            if [ -f "$REPEAT_ALERT_FILE" ]; then
+                rm -f "$REPEAT_ALERT_FILE"
+                log_message "Removed alert timestamp file as disk usage is no longer critical"
+                FOLLOWUP_MESSAGE+="\nDisk usage is now below critical threshold. Repeated alerts have been disabled.\n"
+            fi
         fi
         
         send_email "Follow-up: $CRITICAL_EMAIL_SUBJECT" "$FOLLOWUP_MESSAGE"
@@ -188,8 +271,14 @@ main() {
         send_email "$WARNING_EMAIL_SUBJECT" "$WARNING_MESSAGE"
     else
         log_message "Disk usage is below all thresholds. No action needed."
+        
+        # If disk usage is no longer critical, remove the timestamp file
+        if [ -f "$REPEAT_ALERT_FILE" ]; then
+            rm -f "$REPEAT_ALERT_FILE"
+            log_message "Removed alert timestamp file as disk usage is no longer critical"
+        fi
     fi
 }
 
-# Execute main function
-main
+# Execute main function with any passed arguments
+main "$@"
