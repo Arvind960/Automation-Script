@@ -7,6 +7,7 @@
 # Configuration variables
 THRESHOLD=85                      # Disk usage percentage threshold to trigger cleanup
 CRITICAL_THRESHOLD=90             # Critical disk usage threshold for urgent alerts
+WARNING_THRESHOLD=75              # Warning threshold for early notification
 LOG_DIR="/var/log"                # Directory containing log files to clean
 BACKUP_DIR="/var/backups"         # Directory for backups that can be cleaned
 TEMP_DIR="/tmp"                   # Temporary directory to clean
@@ -14,6 +15,7 @@ LOG_FILE="/var/log/disk_cleanup.log"  # Log file for this script
 ADMIN_EMAIL="admin@example.com"   # Email to send notifications to
 EMAIL_SUBJECT="Disk Usage Alert"  # Email subject
 CRITICAL_EMAIL_SUBJECT="CRITICAL: Disk Usage Alert"  # Critical alert email subject
+WARNING_EMAIL_SUBJECT="WARNING: Disk Usage Alert"    # Warning alert email subject
 
 # Function to log messages
 log_message() {
@@ -166,8 +168,26 @@ main() {
         
         # Send email notification
         send_email "$EMAIL_SUBJECT" "$EMAIL_MESSAGE"
+    
+    # If above warning threshold but below cleanup threshold, send warning only
+    elif [ "$ROOT_USAGE" -ge "$WARNING_THRESHOLD" ]; then
+        log_message "Warning: Disk usage is above warning threshold (${WARNING_THRESHOLD}%)."
+        
+        # Create warning message
+        WARNING_MESSAGE="Disk Usage Warning\n"
+        WARNING_MESSAGE+="================\n\n"
+        WARNING_MESSAGE+="Current disk usage: ${ROOT_USAGE}% has exceeded the warning threshold of ${WARNING_THRESHOLD}%\n\n"
+        WARNING_MESSAGE+="While no immediate action is required, disk usage is trending upward.\n"
+        WARNING_MESSAGE+="Consider reviewing disk usage and planning for potential cleanup.\n\n"
+        WARNING_MESSAGE+="Recommendations:\n"
+        WARNING_MESSAGE+="- Review large files and directories using 'du -h --max-depth=1 /'\n"
+        WARNING_MESSAGE+="- Check for unused applications that can be removed\n"
+        WARNING_MESSAGE+="- Consider archiving or moving old data to external storage\n"
+        
+        # Send warning email
+        send_email "$WARNING_EMAIL_SUBJECT" "$WARNING_MESSAGE"
     else
-        log_message "Disk usage is below threshold. No action needed."
+        log_message "Disk usage is below all thresholds. No action needed."
     fi
 }
 
